@@ -5,9 +5,12 @@ import argparse
 import os.path as osp
 import glob
 import base64
+import json
 
 from PIL import Image
 from StringIO import StringIO
+
+from flask import Flask, request
 
 this_dir = osp.dirname(__file__)
 print(this_dir)
@@ -18,6 +21,9 @@ from lib.fast_rcnn.test import im_detect
 from lib.fast_rcnn.nms_wrapper import nms
 from lib.utils.timer import Timer
 
+
+app = Flask(__name__)
+
 CLASSES = ('__background__',
            'aeroplane', 'bicycle', 'bird', 'boat',
            'bottle', 'bus', 'car', 'cat', 'chair',
@@ -27,6 +33,19 @@ CLASSES = ('__background__',
 
 
 # CLASSES = ('__background__','person','bike','motorbike','car','bus')
+
+
+class JSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        else:
+            return super(JSONEncoder, self).default(obj)
+
 
 def imread_from_base64(base64_str):
     sbuf = StringIO()
@@ -49,6 +68,8 @@ def run_faster_rcnn_on_base64_image(sess, net, base64_img):
     print ('Detection took {:.3f}s for '
            '{:d} object proposals').format(timer.total_time, boxes.shape[0])
 
+    detections = []
+
     CONF_THRESH = 0.8
     NMS_THRESH = 0.3
     for cls_ind, cls in enumerate(CLASSES[1:]):
@@ -60,18 +81,38 @@ def run_faster_rcnn_on_base64_image(sess, net, base64_img):
         keep = nms(dets, NMS_THRESH)
         dets = dets[keep, :]
 
+        detection = get_detection(im, cls, dets, CONF_THRESH)
 
-        # TODO
-        # This prints out all detections for all classes.
-        # Look at vis_detections function in ./demo.py to
-        # get the desired behavior.
-        print '======= DETECTION RESULT =========='
-        print 'IMAGE:', im
-        print '-----------------------------------'
-        print 'CLS:', cls
-        print '-----------------------------------'
-        print 'DETS:', dets
-        print '==================================='
+        if detection:
+            detections.append(detection)
+
+    return detections
+
+
+def get_detection(im, class_name, dets, thresh=0.5):
+    inds = np.where(dets[:, -1] >= thresh)[0]
+    if len(inds) == 0:
+        return
+
+    detection = dict()
+
+    for i in inds:
+        bbox = dets[i, :4]
+        score = dets[i, -1]
+
+        detection = {
+            'prediction': class_name,
+            'score': score,
+            'x': bbox[0], 'y': bbox[1],
+            'width': bbox[2] - bbox[0],
+            'height': bbox[3] - bbox[1]
+        }
+
+        print bbox[0], bbox[1] - 2, '{:s} {:.3f}'.format(class_name, score)
+
+    print '{} detections with p({} | box) >= {:.1f}'.format(class_name, class_name, thresh)
+
+    return detection
 
 
 def parse_args():
@@ -90,6 +131,29 @@ def parse_args():
     args = parser.parse_args()
 
     return args
+
+
+sess, net = None, None
+
+
+@app.route('/')
+def welcome():
+    return 'Welcome to Faster-RCNN detection service.'
+
+
+@app.route('/detect', methods=['GET', 'POST'])
+def detect():
+    if request.method == 'GET':
+        base64_img = request.args.get('image', '').encode('utf8')
+        if base64_img != '':
+            detections = run_faster_rcnn_on_base64_image(sess, net, base64_img)
+            return json.dumps({'detections': detections}, cls=JSONEncoder)
+        else:
+            return 'Image encoding error'
+    elif request.method == 'POST':
+        base64_img = json.loads(request.data).get('image', '')
+        detections = run_faster_rcnn_on_base64_image(sess, net, base64_img)
+        return json.dumps({'detections': detections}, cls=JSONEncoder)
 
 
 if __name__ == '__main__':
@@ -112,25 +176,28 @@ if __name__ == '__main__':
     print (' done.')
 
     # Warmup on a dummy image
-    # im = 128 * np.ones((300, 300, 3), dtype=np.uint8)
-    # for i in xrange(2):
-    #     _, _ = im_detect(sess, net, im)
+    im = 128 * np.ones((300, 300, 3), dtype=np.uint8)
+    for i in xrange(2):
+        _, _ = im_detect(sess, net, im)
 
     # im_names = glob.glob(os.path.join(cfg.DATA_DIR, 'demo', '*.png')) + \
     #            glob.glob(os.path.join(cfg.DATA_DIR, 'demo', '*.jpg'))
 
     # Get a demo image from ../data/demo and encode it to base64
-    with open(os.path.join(cfg.DATA_DIR, 'demo', 'pineapple.jpg'), 'rb') as image:
-        base64_pineapple = base64.b64encode(image.read())
+    # with open(os.path.join(cfg.DATA_DIR, 'demo', '001763.jpg'), 'rb') as image:
+    #     base64_pineapple = base64.b64encode(image.read())
 
-    base64_images = [
-        (
-            'pineapple',
-            base64_pineapple
-        )
-    ]
+    # base64_images = [
+    #     (
+    #         'cat_and_dog',
+    #         base64_pineapple
+    #     )
+    # ]
 
-    for base64_img in base64_images:
-        print '~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
-        print 'Demo for {:s}'.format(base64_img[0])
-        run_faster_rcnn_on_base64_image(sess, net, base64_img[1])
+    app.run()
+
+    # for base64_img in base64_images:
+    #     print '~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
+    #     print 'Demo for {:s}'.format(base64_img[0])
+    #     print run_faster_rcnn_on_base64_image(sess, net, base64_img[1])
+
