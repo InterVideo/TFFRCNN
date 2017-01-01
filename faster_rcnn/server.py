@@ -1,88 +1,136 @@
-#!/usr/bin/env python
-
-"""Use a Fast R-CNN network as an image detection service using Flask."""
-import sys,os
-this_dir = os.path.dirname(__file__)
-sys.path.insert(0, this_dir + '/..')
-# import _init_paths
-from lib.fast_rcnn.test import get_bounding_boxes
-from lib.fast_rcnn.config import cfg, cfg_from_file
-from lib.datasets.factory import get_imdb
-from lib.networks.factory import get_network
-import argparse
-import pprint
-import time
 import tensorflow as tf
+import numpy as np
+import os, sys, cv2
+import argparse
+import os.path as osp
+import glob
+import base64
+
+from PIL import Image
+from StringIO import StringIO
+
+this_dir = osp.dirname(__file__)
+print(this_dir)
+
+from lib.networks.factory import get_network
+from lib.fast_rcnn.config import cfg
+from lib.fast_rcnn.test import im_detect
+from lib.fast_rcnn.nms_wrapper import nms
+from lib.utils.timer import Timer
+
+CLASSES = ('__background__',
+           'aeroplane', 'bicycle', 'bird', 'boat',
+           'bottle', 'bus', 'car', 'cat', 'chair',
+           'cow', 'diningtable', 'dog', 'horse',
+           'motorbike', 'person', 'pottedplant',
+           'sheep', 'sofa', 'train', 'tvmonitor')
+
+
+# CLASSES = ('__background__','person','bike','motorbike','car','bus')
+
+def imread_from_base64(base64_str):
+    sbuf = StringIO()
+    sbuf.write(base64.b64decode(base64_str))
+    pimg = Image.open(sbuf)
+    return cv2.cvtColor(np.array(pimg), cv2.COLOR_RGB2BGR)
+
+
+def run_faster_rcnn_on_base64_image(sess, net, base64_img):
+    """Detect object classes in an image using pre-computed object proposals."""
+
+    # Load the demo image
+    im = imread_from_base64(base64_img)
+
+    # Detect all object classes and regress object bounds
+    timer = Timer()
+    timer.tic()
+    scores, boxes = im_detect(sess, net, im)
+    timer.toc()
+    print ('Detection took {:.3f}s for '
+           '{:d} object proposals').format(timer.total_time, boxes.shape[0])
+
+    CONF_THRESH = 0.8
+    NMS_THRESH = 0.3
+    for cls_ind, cls in enumerate(CLASSES[1:]):
+        cls_ind += 1  # because we skipped background
+        cls_boxes = boxes[:, 4 * cls_ind:4 * (cls_ind + 1)]
+        cls_scores = scores[:, cls_ind]
+        dets = np.hstack((cls_boxes,
+                          cls_scores[:, np.newaxis])).astype(np.float32)
+        keep = nms(dets, NMS_THRESH)
+        dets = dets[keep, :]
+
+
+        # TODO
+        # This prints out all detections for all classes.
+        # Look at vis_detections function in ./demo.py to
+        # get the desired behavior.
+        print '======= DETECTION RESULT =========='
+        print 'IMAGE:', im
+        print '-----------------------------------'
+        print 'CLS:', cls
+        print '-----------------------------------'
+        print 'DETS:', dets
+        print '==================================='
 
 
 def parse_args():
-    """
-    Parse input arguments
-    """
-    parser = argparse.ArgumentParser(description='Test a Fast R-CNN network')
-    parser.add_argument('--gpu', dest='gpu_id', help='GPU id to use',
+    """Parse input arguments."""
+    parser = argparse.ArgumentParser(description='Faster R-CNN demo')
+    parser.add_argument('--gpu', dest='gpu_id', help='GPU device id to use [0]',
                         default=0, type=int)
-    parser.add_argument('--def', dest='prototxt',
-                        help='prototxt file defining the network',
-                        default=None, type=str)
-    parser.add_argument('--weights', dest='model',
-                        help='model to test',
-                        default=None, type=str)
-    parser.add_argument('--cfg', dest='cfg_file',
-                        help='optional config file', default=None, type=str)
-    parser.add_argument('--wait', dest='wait',
-                        help='wait until net file exists',
-                        default=True, type=bool)
-    parser.add_argument('--imdb', dest='imdb_name',
-                        help='dataset to test',
-                        default='voc_2007_test', type=str)
-    parser.add_argument('--comp', dest='comp_mode', help='competition mode',
+    parser.add_argument('--cpu', dest='cpu_mode',
+                        help='Use CPU mode (overrides --gpu)',
                         action='store_true')
-    parser.add_argument('--network', dest='network_name',
-                        help='name of the network',
-                        default=None, type=str)
-
-    if len(sys.argv) == 1:
-        parser.print_help()
-        sys.exit(1)
+    parser.add_argument('--net', dest='demo_net', help='Network to use [vgg16]',
+                        default='VGGnet_test')
+    parser.add_argument('--model', dest='model', help='Model path',
+                        default=' ')
 
     args = parser.parse_args()
+
     return args
 
 
-def run_faster_rcnn(images, config=None):
+if __name__ == '__main__':
+    cfg.TEST.HAS_RPN = True  # Use RPN for proposals
+
     args = parse_args()
 
-    print('Called with args:')
-    print(args)
+    if args.model == ' ' or not os.path.exists(args.model):
+        print ('current path is ' + os.path.abspath(__file__))
+        raise IOError(('Error: Model not found.\n'))
 
-    if args.cfg_file is not None:
-        cfg_from_file(args.cfg_file)
-
-    print('Using config:')
-    pprint.pprint(cfg)
-
-    while not os.path.exists(args.model) and args.wait:
-        print('Waiting for {} to exist...'.format(args.model))
-        time.sleep(10)
-
-    weights_filename = os.path.splitext(os.path.basename(args.model))[0]
-
-    imdb = get_imdb(args.imdb_name)
-    imdb.competition_mode(args.comp_mode)
-
-    device_name = '/gpu:{:d}'.format(args.gpu_id)
-    print device_name
-
-    network = get_network(args.network_name)
-    print 'Use network `{:s}` in training'.format(args.network_name)
-
-    cfg.GPU_ID = args.gpu_id
-
-    # start a session
-    saver = tf.train.Saver()
+    # init session
     sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
+    # load network
+    net = get_network(args.demo_net)
+    # load model
+    print ('Loading network {:s}... '.format(args.demo_net)),
+    saver = tf.train.Saver()
     saver.restore(sess, args.model)
-    print ('Loading model weights from {:s}').format(args.model)
+    print (' done.')
 
-    return get_bounding_boxes(sess, network, imdb, weights_filename)
+    # Warmup on a dummy image
+    # im = 128 * np.ones((300, 300, 3), dtype=np.uint8)
+    # for i in xrange(2):
+    #     _, _ = im_detect(sess, net, im)
+
+    # im_names = glob.glob(os.path.join(cfg.DATA_DIR, 'demo', '*.png')) + \
+    #            glob.glob(os.path.join(cfg.DATA_DIR, 'demo', '*.jpg'))
+
+    # Get a demo image from ../data/demo and encode it to base64
+    with open(os.path.join(cfg.DATA_DIR, 'demo', 'pineapple.jpg'), 'rb') as image:
+        base64_pineapple = base64.b64encode(image.read())
+
+    base64_images = [
+        (
+            'pineapple',
+            base64_pineapple
+        )
+    ]
+
+    for base64_img in base64_images:
+        print '~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
+        print 'Demo for {:s}'.format(base64_img[0])
+        run_faster_rcnn_on_base64_image(sess, net, base64_img[1])
