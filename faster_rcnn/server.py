@@ -14,6 +14,7 @@ import pprint
 import time
 import tensorflow as tf
 
+
 def parse_args():
     """
     Parse input arguments

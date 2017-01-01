@@ -1,12 +1,16 @@
 import argparse
 import numpy as np
 import cv2
+import base64
 import cPickle
 import heapq
 import os
 import math
 import tensorflow as tf
 import matplotlib.pyplot as plt
+
+from PIL import Image
+from StringIO import StringIO
 
 from .config import cfg, get_output_dir
 
@@ -402,3 +406,10 @@ def get_bounding_boxes(sess, net, imdb, weights_filename , max_per_image=300, th
               .format(i + 1, num_images, detect_time, nms_time)
 
     return all_boxes
+
+
+def imread_from_base64(base64_str):
+    sbuf = StringIO()
+    sbuf.write(base64.base64decode(base64_str))
+    pimg = Image.open(sbuf)
+    return cv2.cvtColor(np.array(pimg), cv2.COLOR_RGB2BGR)
