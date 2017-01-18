@@ -12,6 +12,9 @@ from StringIO import StringIO
 
 from flask import Flask, request
 
+from huey.consumer import EVENT_FINISHED
+from huey_queue_config import huey
+
 this_dir = osp.dirname(__file__)
 print(this_dir)
 
@@ -21,6 +24,7 @@ from lib.fast_rcnn.test import im_detect
 from lib.fast_rcnn.nms_wrapper import nms
 from lib.utils.timer import Timer
 
+from faster_rcnn.queue_tasks import train_exemplar_svm_on_sift_features
 
 app = Flask(__name__)
 
@@ -134,7 +138,7 @@ def parse_args():
 
 
 sess, net = None, None
-
+SVM_MODEL = None
 
 @app.route('/')
 def welcome():
@@ -154,6 +158,49 @@ def detect():
         base64_img = json.loads(request.data).get('image', '')
         detections = run_faster_rcnn_on_base64_image(sess, net, base64_img)
         return json.dumps({'detections': detections}, cls=JSONEncoder)
+
+
+@app.route('/train-svm', methods=['POST']):
+def train_svm():
+    data = json.loads(request.data)
+    detections = data.get('detections', None)
+    image = data.get('image', None)
+    positive_crop = data.get('positive_crop', None)
+    use_dense_sift = data.get('use_dense_sift', False)
+    clustering = data.get('clustering', 'kmeans')
+
+    if not (detections and image and positive_crop):
+        return json.dumps({'error': 'Parameters error'})
+
+    image = imread_from_base64(image)
+    positive_crop = imread_from_base64(positive_crop)
+
+    SVM_MODEL = train_exemplar_svm_on_sift_features(
+        image, positive_crop,
+        detections[0], detections[1],
+        dense_sift=use_dense_sift,
+        clustering=clustering
+    )()
+
+    return json.dumps({'result': 'Success'})
+
+
+@app.route('/predict', methods=['POST']):
+def predict():
+    if SVM_MODEL is None:
+        return json.dumps({
+            'error': 'SVM is not initialized. First initialize it by going to /train-svm'
+        })
+
+    data = json.loads(request.data)
+    test_image = data.get('image', None)
+
+    if test_image is None:
+        return json.dumps({'error': 'Image parameter is not provided or is incorrect'})
+
+    test_image = imread_from_base64(test_image)
+    result = SVM_MODEL.predict(test_image)
+    return json.dumps({'result': result}, cls=JSONEncoder)
 
 
 if __name__ == '__main__':
