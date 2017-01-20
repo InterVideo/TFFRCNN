@@ -142,7 +142,9 @@ class SiftFeaturesPreparator(object):
 
 		if clustering == 'gmm':
 			return self._gmm_clustering(descriptors, n_clusters)
-		else clustering == 'kmeans':
+		elif clustering == 'kmeans':
+			return self._kmeans_clustering(descriptors, n_clusters)
+		else:
 			return self._kmeans_clustering(descriptors, n_clusters)
 
 	def _kmeans_clustering(self, X, n_clusters, batch_size=128):
@@ -237,11 +239,15 @@ def create_histogram(image, hist_size=2048, codebook=[], detectAndCompute=SIFT_c
 	return normalize(histogram[:, np.newaxis], axis=0).ravel()
 
 
-def create_dataset_for_svm(original_image, cropped_positive_image, cropped_image_point_on_original):
+def create_dataset_for_svm(original_image, cropped_positive_image,
+						   cropped_image_point_on_original, augment_data=True):
     negatives = get_negative_crops(
     	original_image, cropped_positive_image, cropped_image_point_on_original
     )
-	negatives = data_augmentation(negatives)
+
+    if augment_data:
+        negatives = data_augmentation(negatives)
+
 	print 'NEGATIVES_LENGTH (sift_svm.py):', len(negatives)
     y = -np.ones(len(negatives))
     X = np.vstack([negatives, [cropped_positive_image]])

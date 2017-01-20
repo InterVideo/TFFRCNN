@@ -4,8 +4,6 @@ import pylab as pl
 from scikits.learn import svm
 from scikits.learn.base import BaseEstimator, ClassifierMixin
 
-###############################################################################
-# Define kernels
 
 class RBF(object):
     """docstring for RBF"""

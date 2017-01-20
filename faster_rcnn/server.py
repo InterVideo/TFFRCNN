@@ -11,9 +11,10 @@ from PIL import Image
 from StringIO import StringIO
 
 from flask import Flask, request
+from flask_cors import CORS
 
-from huey.consumer import EVENT_FINISHED
-from huey_queue_config import huey
+# from huey.consumer import EVENT_FINISHED
+# from huey_queue_config import huey
 
 this_dir = osp.dirname(__file__)
 print(this_dir)
@@ -27,6 +28,7 @@ from lib.utils.timer import Timer
 from faster_rcnn.queue_tasks import train_exemplar_svm_on_sift_features
 
 app = Flask(__name__)
+CORS(app)
 
 CLASSES = ('__background__',
            'aeroplane', 'bicycle', 'bird', 'boat',
@@ -160,7 +162,7 @@ def detect():
         return json.dumps({'detections': detections}, cls=JSONEncoder)
 
 
-@app.route('/train-svm', methods=['POST']):
+@app.route('/train-svm', methods=['POST'])
 def train_svm():
     data = json.loads(request.data)
     detections = data.get('detections', None)
@@ -168,6 +170,7 @@ def train_svm():
     positive_crop = data.get('positive_crop', None)
     use_dense_sift = data.get('use_dense_sift', False)
     clustering = data.get('clustering', 'kmeans')
+    augment_data = data.get('augment_data', True)
 
     if not (detections and image and positive_crop):
         return json.dumps({'error': 'Parameters error'})
@@ -179,13 +182,14 @@ def train_svm():
         image, positive_crop,
         detections[0], detections[1],
         dense_sift=use_dense_sift,
-        clustering=clustering
-    )()
+        clustering=clustering,
+        augment_data=augment_data
+    )
 
     return json.dumps({'result': 'Success'})
 
 
-@app.route('/predict', methods=['POST']):
+@app.route('/predict', methods=['POST'])
 def predict():
     if SVM_MODEL is None:
         return json.dumps({
@@ -241,7 +245,7 @@ if __name__ == '__main__':
     #     )
     # ]
 
-    app.run()
+    app.run(host='0.0.0.0', port='8887')
 
     # for base64_img in base64_images:
     #     print '~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
